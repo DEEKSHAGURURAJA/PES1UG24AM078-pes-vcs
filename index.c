@@ -134,42 +134,107 @@ int index_status(const Index *index) {
 //   - hex_to_hash                      : converting the parsed string to ObjectID
 //
 // Returns 0 on success, -1 on error.
+// ─── HELPER FUNCTIONS (Add these to fix linker errors) ──────────────────────
+
+static void* read_file(const char *path, size_t *size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    *size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    void *data = malloc(*size);
+    if (data) {
+        if (fread(data, 1, *size, f) != *size) {
+            free(data);
+            data = NULL;
+        }
+    }
+    fclose(f);
+    return data;
+}
+
+static uint32_t get_file_mode(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return 0100644;
+    return st.st_mode;
+}
+
+// Declaration for the function in object.
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
+
+// ─── TODO: Implement these ───────────────────────────────────────────────────
+
 int index_load(Index *index) {
-    // TODO: Implement index loading
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    FILE *f = fopen(INDEX_FILE, "r");
+    if (!f) return 0; 
+
+    index->count = 0;
+    char line[1024];
+    while (fgets(line, sizeof(line), f) && index->count < MAX_INDEX_ENTRIES) {
+        IndexEntry *e = &index->entries[index->count++];
+        char hex[HASH_HEX_SIZE + 1];
+        
+        // Use %u for uint32_t fields (mode and )
+        if (sscanf(line, "%o %64s %ld %u %511s", 
+                   &e->mode, hex, &e->mtime_sec, &e->size, e->path) >= 3) {
+            hex_to_hash(hex, &e->hash);
+        }
+    }
+    fclose(f);
+    return 0;
 }
 
-// Save the index to .pes/index atomically.
-//
-// HINTS - Useful functions and syscalls:
-//   - qsort                            : sorting the entries array by path
-//   - fopen (with "w"), fprintf        : writing to the temporary file
-//   - hash_to_hex                      : converting ObjectID for text output
-//   - fflush, fileno, fsync, fclose    : flushing userspace buffers and syncing to disk
-//   - rename                           : atomically moving the temp file over the old index
-//
-// Returns 0 on success, -1 on error.
 int index_save(const Index *index) {
-    // TODO: Implement atomic index saving
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    char temp_path[512];
+    sprintf(temp_path, "%s.tmp", INDEX_FILE);
+    
+    FILE *f = fopen(temp_path, "w");
+    if (!f) return -1;
+
+    for (int i = 0; i < index->count; i++) {
+        char hex[HASH_HEX_SIZE + 1];
+        hash_to_hex(&index->entries[i].hash, hex);
+        // Use %u for uint32_t fields (mode and size)
+        fprintf(f, "%o %s %ld %u %s\n", 
+                index->entries[i].mode, hex, 
+                index->entries[i].mtime_sec, index->entries[i].size, 
+                index->entries[i].path);
+    }
+
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    return rename(temp_path, INDEX_FILE);
 }
 
-// Stage a file for the next commit.
-//
-// HINTS - Useful functions and syscalls:
-//   - fopen, fread, fclose             : reading the target file's contents
-//   - object_write                     : saving the contents as OBJ_BLOB
-//   - stat / lstat                     : getting file metadata (size, mtime, mode)
-//   - index_find                       : checking if the file is already staged
-//
-// Returns 0 on success, -1 on error.
 int index_add(Index *index, const char *path) {
-    // TODO: Implement file staging
-    // (See Lab Appendix for logical steps)
-    (void)index; (void)path;
-    return -1;
+    size_t size;
+    void *data = read_file(path, &size); 
+    if (!data) return -1;
+
+    ObjectID id;
+    if (object_write(OBJ_BLOB, data, size, &id) != 0) {
+        free(data);
+        return -1;
+    }
+    free(data);
+
+    struct stat st;
+    stat(path, &st);
+
+    IndexEntry *e = index_find(index, path);
+    if (!e) {
+        if (index->count >= MAX_INDEX_ENTRIES) return -1;
+        e = &index->entries[index->count++];
+        strncpy(e->path, path, sizeof(e->path) - 1);
+        e->path[sizeof(e->path) - 1] = '\0';
+    }
+    
+    memcpy(&e->hash, &id, sizeof(ObjectID));
+    e->mode = st.st_mode;
+    e->size = st.st_size;
+    e->mtime_sec = st.st_mtime;
+    
+    return index_save(index);
 }
