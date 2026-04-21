@@ -543,6 +543,8 @@ make test-integration
 
 ---
 
+ <img width="371" height="776" alt="image" src="https://github.com/user-attachments/assets/bcf36af6-ac03-4507-81af-28c48cd62b83" />
+
 ## Phase 5 & 6: Analysis-Only Questions
 
 The following questions cover filesystem concepts beyond the implementation scope of this lab. Answer them in writing — no code required.
